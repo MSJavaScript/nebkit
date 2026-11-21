@@ -4,6 +4,7 @@ from typing import List, Tuple, Dict, Set, Any
 
 from ase import Atoms 
 from ase.data import atomic_numbers
+from ase.io import write 
  
 from copy import deepcopy
 
@@ -16,7 +17,7 @@ from random import shuffle
 import numpy as np
 
 from .helper import ReactionHelper
-from nebkit.tools.utils import ase_atoms_to_mol, pattern_to_mol
+from nebkit.tools.utils import ase_atoms_to_mol, pattern_to_mol, mol_to_ase_atoms
 
 MAX_COORD_NUM = {1: 1, # H
                  6: 4, # C
@@ -76,6 +77,17 @@ def count_atoms(mol:Chem.Mol):
             result[n] = 1
     return result  
 
+def make_pure_graph(mol: Chem.Mol) -> Chem.Mol:
+    """Force the molecule to be a pure connectivity graph (no radicals, no implicit H)."""
+    rw = Chem.RWMol(mol)
+    for atom in rw.GetAtoms():
+        atom.SetNoImplicit(True)
+        atom.SetNumRadicalElectrons(0)
+        atom.SetFormalCharge(0)   # uncomment if you also want to ignore charges
+    rw.UpdatePropertyCache(strict=False)
+    return rw.GetMol()
+
+
 def merge_two_mols(mol1:Chem.Mol, index1:int, mol2:Chem.Mol, index2:int) -> Chem.Mol:
     combined = CombineMols(mol1, mol2)
     combined_rw = Chem.RWMol(combined) 
@@ -90,7 +102,7 @@ def form_bond_in_mol(mol:Chem.Mol, index1:int, index2:int) -> Chem.Mol:
     new_mol = new_mol.GetMol()
     return new_mol
 
-def break_bond_in_mol(mol:Chem.Mol, index1:int, index2:int)->Tuple[Chem.Mol]:
+def break_bond_in_mol(mol:Chem.Mol, index1:int, index2:int)->Tuple[Chem.Mol, ...]:
     bond = mol.GetBondBetweenAtoms(index1, index2)
     if bond is None:
         raise ValueError(f"There is no bond between {index1} and {index2}")    
@@ -98,7 +110,10 @@ def break_bond_in_mol(mol:Chem.Mol, index1:int, index2:int)->Tuple[Chem.Mol]:
     rw_mol.RemoveBond(index1, index2)
     temp_mol = rw_mol.GetMol()
     frags = Chem.GetMolFrags(temp_mol, asMols=True)
-    return frags
+    # Removing a bond that belongs to a ring does not disconnect the molecule,
+    # so `frags` may contain a single fragment (ring opening). Return however
+    # many fragments result instead of assuming exactly two.
+    return tuple(make_pure_graph(frag) for frag in frags)
 
 
 def get_mol_info(mol:Chem.Mol):
@@ -159,10 +174,11 @@ class ExploreReactionNetwork:
 
         self.reac_mols = [ase_atoms_to_mol(atoms) for atoms in reactants]
         self.prod_mols = [ase_atoms_to_mol(atoms) for atoms in products]
+
         self.prod_smiles = {Chem.MolToSmiles(mol, canonical=True) for mol in self.prod_mols}
 
         self.forbidden_patterns = []
-        if not forbidden_pattern is None:
+        if forbidden_pattern:
             for symbols, adjacent_strs in forbidden_pattern:
                 self.forbidden_patterns.append(pattern_to_mol(symbols, adjacent_strs))
 
@@ -497,6 +513,9 @@ class ExploreReactionNetwork:
                     queue.append(new_state) # 不满足终止条件则入队列
             if n_empty_and_fail == n_states:
                 n_fail += 1
+
+
+        return False
     
     def run(self):
         state = {
@@ -514,6 +533,8 @@ class ExploreReactionNetwork:
 
             next_states = self.get_next_states(state)
             # print('next_states = ', next_states)
+            # print("current_mols = ", state["current_mols"])
+            
             if len(next_states) == 0:
                 # 没有产生新状态，说明current_mols中的分子无法断键（因为形成该分子的反应已经被包含在内）
                 # 也无法成键（因为所有原子都已经饱和）。这说明current_mols中全部都是新的饱和产物分子。

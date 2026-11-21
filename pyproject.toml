@@ -9,10 +9,9 @@ dependencies = [
     "ase",
     "pymatgen",
     "scipy",
-    "rdkit",
-    "mp-api"
+    "rdkit"
 ]
 
 [tool.setuptools.packages.find]
-include = ["nebkit*"]
-exclude = ["recycle*", "test*", "pics*"]
+where = ["src"]
+exclude = ["recycle", "test", "pics"]

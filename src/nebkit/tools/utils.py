@@ -144,6 +144,7 @@ def ase_atoms_to_mol(atoms:Atoms, skin:float=0.1, ignoreH:bool = False) -> Chem.
     symbols = atoms.get_chemical_symbols()
     for s in symbols:
         atom = Chem.Atom(s)
+        atom.SetNoImplicit(True)
         mol.AddAtom(atom)
     for i in range(natoms):
         index, _ = nl.get_neighbors(i)

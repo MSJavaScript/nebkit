@@ -3,8 +3,8 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 
 from nebkit.tools.structure import sort_elements, group_surface_layers
-from fairchem.slab import Slab 
-from fairchem.bulk import Bulk
+from nebkit.fairchem.slab import Slab
+from nebkit.fairchem.bulk import Bulk
 
 def build_surface_from_bulk(
         bulk_atoms: Atoms,

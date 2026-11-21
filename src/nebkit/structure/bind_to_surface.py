@@ -2,6 +2,7 @@ from ase.neighborlist import NeighborList, natural_cutoffs
 from ase import Atoms 
 from ase.data import covalent_radii
 from ase.optimize import MDMin
+from ase.constraints import FixAtoms
 
 from typing import List, Tuple 
 
@@ -167,7 +168,7 @@ def _bind_single_ads_to_surface(ads:Atoms,
             # 把吸附物吸引到指定的位点
             combined.calc = AtomAttractor(nsurf_atoms=nsurf_atom, atom_group_pairs=[(ads_binding_index, [b_i])])
             opt = MDMin(combined, logfile='tmp.log', trajectory='tmp.traj')
-            opt.run(fmax=0.1, steps=50)
+            opt.run(fmax=0.2, steps=50)
             # 在x和y方向加上一些扰动
             combined.positions[nsurf_atom:, 0:2] += np.random.random((2, )) * max_radius - 0.5*max_radius
             result.append(combined)
@@ -243,6 +244,12 @@ def _bind_ini_fin_to_surface(total_atoms:Atoms,
     natoms = int(len(total_atoms)/2)
     # 表面原子的最大半径
     max_radius = np.max([ covalent_radii[a] for a in surface.get_atomic_numbers() ])
+
+    if len(surface.constraints) != 0:
+        fix_indices = surface.constraints[0].get_indices()
+        constraints = FixAtoms(indices=fix_indices)
+    else:
+        constraints = None 
 
     ini_result = []
     fin_result = []
@@ -343,7 +350,11 @@ def _bind_ini_fin_to_surface(total_atoms:Atoms,
                                         numbers = surf_and_total_atoms_2.numbers[fin_state_index],
                                         positions = surf_and_total_atoms_2.positions[fin_state_index],
                                         pbc = [True, True, True]))
-            
+    if constraints:
+        for item in ini_result:
+            item.set_constraint(constraints)
+        for item in fin_result:
+            item.set_constraint(constraints)
     return ini_result, fin_result, ads_index
 
 # 如果NEB的数据较少，可以调用该函数
@@ -385,7 +396,6 @@ def bind_ini_fin_to_surface(ini:List[Atoms],
     total_atoms_radius = np.max(total_atoms.get_all_distances(mic=True))*0.5 \
         + np.max([ covalent_radii[a] for a in ini_combined.get_atomic_numbers() ])
     total_atoms_center = np.mean(total_atoms.positions, axis=0)
-
 
     surface_sites, dist_mat = get_outmost_atoms_for_surface(surface)
     sites_groups = classify_surface_atoms(surface, surface_sites)

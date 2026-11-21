@@ -7,11 +7,13 @@ from typing import List, Tuple, Dict, Set
 
 from rdkit import Chem 
 import numpy as np
+import json, os
 
 from .generate import ExploreReactionNetwork
 from .helper import ReactionHelper
 from nebkit.tools.utils import ase_atoms_to_mol, get_adsorbate_binding_atom_index
 from nebkit.structure.bind_to_surface import get_outmost_atoms_for_surface, get_gcn, _bind_ini_fin_to_surface
+from nebkit.tools.plot_reaction import visualize_reaction, visualize_reaction_rdkit, draw_molecules_array
 
 
 
@@ -76,6 +78,7 @@ class ReactionSystem:
         # 物种的atoms对象。这个成员用于批量构建中间物种在表面上的吸附态，
         # 以便于使用热力学方法进行反应路径的初筛
         self.species_atoms_list = []
+        self.species_mols_list = []
 
         # 每个物种的smiles表示
         self.species_smiles_list = []
@@ -94,6 +97,78 @@ class ReactionSystem:
         self.reactions_list:List[ReactionHelper] = [] 
         
 
+    def dump_info(self, file_name:str):
+        assert file_name.endswith('json')
+        reactions = []
+        for i, reac in enumerate(self.reactions_list):
+            reactions.append({
+                "id": i,
+                "reac_str": reac.reaction_str,
+                "reactant_indices":self.reaction_num_tuple[i][0],
+                "product_indices": self.reaction_num_tuple[i][1]
+            })
+        info = {
+            "n_reactions": len(self.reactions_list),
+            "n_species": len(self.species_atoms_list),
+            "reactions": reactions
+        }
+        with open(file_name, mode="w") as f:
+            json.dump(info, f, indent=2)
+
+        parent_dir = os.path.dirname(file_name)
+        intermediate_path = os.path.join(parent_dir, "intermediates.extxyz")
+        write(intermediate_path, self.species_atoms_list, format="extxyz")
+
+        return f"Informations of all the reactions are written to {file_name}. The atomic structures of all the intermediates are save in {intermediate_path}."
+
+
+    def render_system(self, dir_name:str, backend:str):
+        n_species = len(self.species_atoms_list)
+        n_reactions = len(self.reactions_list)
+
+        n_col = 3 if n_species < 10 else 5
+        n_row = int(float(n_species)/n_col)
+        if n_row * n_col < n_species:
+            n_row += 1
+        draw_molecules_array(self.species_atoms_list, 
+                             self.species_mols_list,
+                             nrow=n_row, ncol=n_col, 
+                             width=3*n_col, 
+                             height=3*n_row, 
+                             save_name=os.path.join(dir_name, "intermediates.png"),
+                             dpi=75, backend=backend)
+        
+        if backend == "ase":
+            for i, reac in enumerate(self.reactions_list):
+                name = os.path.join(dir_name, f"reaction_{i}.png")
+                reac_atoms = reac.reactants_atoms
+                reac_coeff = [1] * len(reac_atoms)
+                prod_atoms = reac.products_atoms
+                prod_coeff = [1] * len(prod_atoms)
+                
+                visualize_reaction(reactants=reac_atoms, 
+                                   reactant_coeffs=reac_coeff,
+                                   products=prod_atoms, 
+                                   product_coeffs=prod_coeff,
+                                   width=6, height=2.5, 
+                                   save_name=name, dpi=75)
+        else:
+            for i, reac in enumerate(self.reactions_list):
+                name = os.path.join(dir_name, f"reaction_{i}.png")
+                reac_mols = reac.reactants_mols
+                reac_coeff = [1] * len(reac_mols)
+                prod_mols = reac.products_mols
+                prod_coeff = [1] * len(prod_mols)
+                visualize_reaction_rdkit(reactants=reac_mols,
+                                         reactant_coeffs=reac_coeff,
+                                         products=prod_mols,
+                                         product_coeffs=prod_coeff,
+                                         width=6, height=2.5, 
+                                         save_name=name, dpi=75)
+
+        
+
+        return f"Structures of {n_species} intermediates are shown in {os.path.join(dir_name, "intermediates.png")}\n {n_reactions} reactions are shown in pictures reaction_0.png to reaction_{n_reactions-1}.png in {dir_name}."
 
     def _delete_related_reactions(self, 
                                   initial_reactions_indices:List[int],
@@ -147,11 +222,13 @@ class ReactionSystem:
         '''
         # 先把所有的数据都初始化
         self.species_atoms_list = self.reactants + self.products
+        self.species_mols_list = [ase_atoms_to_mol(item) for item in self.species_atoms_list]
         self.reactions_list     = []
         self.reaction_num_tuple = []
         self.reactants_products_indices = list(range(len(self.species_atoms_list)))
+
         # 现有的物种是反应物和最终产物，先把它们加入 species_smiles 
-        self.species_smiles_list = [Chem.MolToSmiles(ase_atoms_to_mol(item)) for item in self.species_atoms_list ]
+        self.species_smiles_list = [Chem.MolToSmiles(mol_item) for mol_item in self.species_mols_list ]
         reaction_numstr_set = set()
 
         for reaction in reactions:
@@ -159,11 +236,13 @@ class ReactionSystem:
                 if not s in self.species_smiles_list:
                     self.species_smiles_list.append(s)
                     self.species_atoms_list.append(reaction.reactants_atoms[i])
+                    self.species_mols_list.append(reaction.reactants_mols[i])
 
             for i, s in enumerate(reaction.products_smiles):  
                 if not s in self.species_smiles_list:
                     self.species_smiles_list.append(s)
                     self.species_atoms_list.append(reaction.products_atoms[i])
+                    self.species_mols_list.append(reaction.products_mols[i])
 
             # 现有的物种都已经自动被赋予id，构建反应对应的数字字符串
             ids_of_reactants = sorted([self.species_smiles_list.index(ss) for ss in reaction.reactants_smiles])
@@ -382,6 +461,9 @@ class ReactionSystem:
         collect_result = []
 
         for surf_info in surface_info_list:
+
+            n_surface_atoms = len(surf_info["surface"])
+
             intermediate_index_dict = dict()
             reactions_result_list = []
 
@@ -403,11 +485,11 @@ class ReactionSystem:
                     if not reac.products_smiles[0] in intermediate_index_dict:
                         intermediate_index_dict[reac.products_smiles[0]] = (ir, 1, ads_index)
 
-                
                 reactions_result_list.append({
                     "name": self.reactions_list[ir].unique_reaction_str,
                     "ini": ini_result,
-                    "fin": fin_result
+                    "fin": fin_result,
+                    "ads_atoms_index": list(range(n_surface_atoms, len(ini_result[0])))
                 })
 
             collect_result.append((intermediate_index_dict, reactions_result_list))

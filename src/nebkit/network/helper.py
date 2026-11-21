@@ -250,7 +250,7 @@ def _combine_atoms(list_of_atoms:List[Atoms]):
         max_radius2 = np.max([covalent_radii[a] for a in atoms2.get_atomic_numbers()])
         diameter2 = np.max(atoms2.get_all_distances()) + 2.0*max_radius2
 
-        dist = max(3.0, 0.5*(diameter1 + diameter2) + max(max_radius1, max_radius2))
+        dist = max(4.0, 0.5*(diameter1 + diameter2) + max(max_radius1, max_radius2))
 
         center1 = np.array([-0.5*dist, 0, 0])
         center = np.mean(atoms1.positions, axis=0)

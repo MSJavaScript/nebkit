@@ -1,0 +1,2 @@
+# Do not ship tests in the source distribution.
+prune test
