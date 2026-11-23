@@ -267,7 +267,7 @@ def _bind_ini_fin_to_surface(total_atoms:Atoms,
                                    surface.positions[sites[0], 2] + total_atoms_radius])
             new_total_atoms.set_positions(total_atoms.positions - total_atoms_center + new_center)
             surf_and_total_atoms:Atoms = surface + new_total_atoms
-            surf_and_total_atoms.calc = AtomAttractor(nsurf_atoms, [(total_binding_index, sites)])
+            surf_and_total_atoms.calc = AtomAttractor(nsurf_atoms, [(total_binding_index[0], sites)])
             opt = MDMin(surf_and_total_atoms, logfile='tmp.log', trajectory='tmp.traj')
             opt.run(fmax=0.2, steps=50)
         

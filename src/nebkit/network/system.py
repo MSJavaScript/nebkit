@@ -7,7 +7,7 @@ from typing import List, Tuple, Dict, Set, Literal
 
 from rdkit import Chem 
 import numpy as np
-import json, os
+import json, os, warnings
 
 from .generate import ExploreReactionNetwork
 from .helper import ReactionHelper
@@ -16,6 +16,11 @@ from nebkit.structure.builder.bind_to_surface import (get_outmost_atoms_for_surf
                                                       get_gcn, 
                                                       _bind_ini_fin_to_surface)
 from .plot_reaction import visualize_reaction, visualize_reaction_rdkit, draw_molecules_array
+
+_COADSORBED_SPECIES_MESSAGE = (
+    "These species are not included in intermediate_index_dict, because all the them are co-adsorbed. "
+    "To build these structures, call bind_single_ads_to_surface()"
+)
 
 def _get_unsaturation_degree(mol:Chem.Mol):
     MAX_COORD_NUM = {1: 1, # H
@@ -225,8 +230,8 @@ class ReactionSystem:
         # 提供初始的被删除反应的索引和反应涉及到的物种，据此找出所有需要被删除的反应
         # 例如反应网络里有一条路径 (1) CH + O <-> HCO, (2) HCO <-> CO + H. 同时没有其他
         # 反应生成或消耗HCO，那么删除了(1) 和 (2)中的其中一个必然要删除另外一个。
-        reactions_need_tobe_deleted = initial_reactions_indices
-        species_in_deleted_reactions = initial_species_indices
+        reactions_need_tobe_deleted = list(initial_reactions_indices)
+        species_in_deleted_reactions = set(initial_species_indices)
         nreactions = len(self.reactions_list)
         while True:
             find_delete = False 
@@ -328,10 +333,10 @@ class ReactionSystem:
             forbidden_pattern: Substructures of intermediates that are prohibited. For example, use `('H,O,C,O,H','0-1,1-2,2-3,3-4')` to represent geminal diol. If omitted, a list of default patterns are generated.
         '''
 
-        if forbidden_pattern is None:
-            forbidden_pattern = _get_default_bad_patterns(self.elements, max_natoms) 
         if max_natoms is None:
             max_natoms = _get_default_max_natoms(self.products)
+        if forbidden_pattern is None:
+            forbidden_pattern = _get_default_bad_patterns(self.elements, max_natoms)
         
         ern = ExploreReactionNetwork(self.reactants, 
                                      self.products, 
@@ -357,6 +362,8 @@ class ReactionSystem:
     def delete_species(self, indices:List[int]):
         '''
         Delete the species of `idx` and the related elementary steps.
+
+        Reactions that become dead ends after the deletion are also removed. Reaction and species indices may change, so recalculate indices before deleting again.
         '''
         nreactions = len(self.reaction_num_tuple)
         reactions_need_tobe_deleted = []
@@ -396,9 +403,10 @@ class ReactionSystem:
     def delete_reactions(self, indices:List[int]):
         '''
         Delete elementary reactions.
+
+        Reactions that become dead ends after the deletion are also removed. Reaction and species indices may change, so recalculate indices before deleting again.
         '''
         nreactions = len(self.reaction_num_tuple)
-        reactions_need_tobe_deleted = indices
 
         species_in_deleted_reactions = set()
         for i in indices:
@@ -454,20 +462,22 @@ class ReactionSystem:
         Give surface structures, build IS and FS on these surfaces. Atomic indices are automatically matched, fragments orientation are aligned.
         Args:
             surfaces: A list of surface Atoms object.
-        Returns: A list of tuple, each tuple has 2 elements, corresponding to a surface given in `surfaces` arg. 
-        
-        The first element is a dict, key is the smiles string of intermediate species, value is a 3-elements tuple: (ir, 0/1, list)
-        - First element: The index of reaction which contains this species.
-        - Second element: 0 or 1. 0 means this species is reactant, 1 means this species is product.
-        - Third element: A list of int. These are the indices of structures, see below.
+        Returns: A list of tuples, one tuple per surface given in `surfaces`. Each tuple has 2 elements:
+        - intermediate_index_dict: A dict. The key is the smiles string of an intermediate species.
+          The value is a 3-elements tuple: (ir, 0/1, list)
+            - First element: The index of reaction which contains this species.
+            - Second element: 0 or 1. 0 means this species is reactant, 1 means this species is product.
+            - Third element: A list of int. These are the indices of structures, see below.
+          Only species that appear alone on one side of at least one reaction are included.
+          Species that only appear together with another fragment (i.e. co-adsorbed species) are not included.
+          If any species are missing from this dict, a warning is printed. Use `bind_single_ads_to_surface()` to build the adsorption structures of those co-adsorbed species.
+        - reactions_result_list: A list of dict. Each dict corresponds to a reaction and has 4 fields:
+            - name: The string representation of a reaction.
+            - ini: A list of Atoms objects. These are all the possible IS structures on the given surface. Surface sites are enumerated according to local chemical environment.
+            - fin: The list of FS structures corresponding to `ini`. Atomic indices are matched. Fragments orientation is also aligned.
+            - ads_atoms_index: The atomic indices of adsorbates. Useful when you want to fix surface atoms.
 
-        The Second element is a list of dict. Each dict corresponding to a reaction, it has 4 fields:
-        - name: The string representation of a reaction.
-        - ini: A list of Atoms object, these are all the possible IS structures on the given surface, surface sites are enumerated according to local chemical environment.
-        - fin: The list of FS structures corresponding to `ini` field. Atomic indices are matched. Fragments orientation is also aligned.
-        - ads_atoms_index: The atomic indices of adsorbates. Useful when you want to fix surface atoms.
-
-        Because there are usually more reactions than intermediates. For example, CO can appear in reactions `CO2<->CO+O`, `CO+H<->COH` and `CO<->C+O`. For these reactions, they can use the same CO adsorption structure. We provide the first element of the tuple for convenience, to only preform calculation on the adsorption structure once, instead of calculate it for each of the reaction. For example, for intermediate CO, suppose the tuple is (1, 0, [0,1,2]). Then we can only perform DFT calculation on IS (the second element is 0) structures 0,1,2 of reaction 1. These are all the possible CO adsorption structures we will meet in this reaction system.
+        Because there are usually more reactions than intermediates. For example, CO can appear in reactions `CO2<->CO+O`, `CO+H<->COH` and `CO<->C+O`. For these reactions, they can use the same CO adsorption structure. We provide the first element of the tuple for convenience, to only perform calculation on the adsorption structure once, instead of calculating it for each reaction. For example, for intermediate CO, suppose the tuple is (1, 0, [0,1,2]). Then we can only perform DFT calculation on IS (the second element is 0) structures 0,1,2 of reaction 1. These are all the possible CO adsorption structures we will meet in this reaction system.
         '''
         # 获取表面的最表层原子 
         surface_info_list = []
@@ -555,6 +565,7 @@ class ReactionSystem:
 
 
         collect_result = []
+        warned_missing_species = False
 
         for surf_info in surface_info_list:
 
@@ -588,6 +599,10 @@ class ReactionSystem:
                     "ads_atoms_index": list(range(n_surface_atoms, len(ini_result[0])))
                 })
 
+            missing_species = [s for s in self.species_smiles_list if s not in intermediate_index_dict]
+            if missing_species and not warned_missing_species:
+                warnings.warn(_COADSORBED_SPECIES_MESSAGE, UserWarning, stacklevel=2)
+                warned_missing_species = True
             collect_result.append((intermediate_index_dict, reactions_result_list))
 
         return collect_result 
