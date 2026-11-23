@@ -5,8 +5,8 @@ from ase.data import covalent_radii
 from rdkit import Chem
 import numpy as np
 from typing import List, Tuple 
-from nebkit.tools.utils import mol_to_ase_atoms
-from nebkit.calculator.match_reactants_and_products import RigidMDMin, AlignIniFinAtoms
+from .utils import mol_to_ase_atoms
+from nebkit.structure.calculator.match_reactants_and_products import RigidMDMin, AlignIniFinAtoms
 
 class ReactionHelper:
     def __init__(self, 

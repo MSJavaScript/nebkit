@@ -2,7 +2,7 @@ from ase import Atoms
 from ase.mep import NEB 
 
 from typing import List 
-from nebkit.tools.utils import get_structures_distance
+from nebkit.structure.utils import get_structures_distance
 
 def build_neb_path(ini_state:Atoms, 
                    fin_state:Atoms, 

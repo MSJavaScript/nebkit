@@ -13,11 +13,11 @@ import numpy as np
 from rdkit import Chem 
 from random import sample 
 
-from nebkit.calculator.atom_attractor import AtomAttractor
-from nebkit.calculator.match_reactants_and_products import RigidMDMin, AlignIniFinAtoms
-from nebkit.tools.structure import group_surface_layers
-from nebkit.tools.utils import get_adsorbate_binding_atom_index, ase_atoms_to_mol
-from nebkit.tools.matching import match_atom_indices
+from nebkit.structure.calculator.atom_attractor import AtomAttractor
+from nebkit.structure.calculator.match_reactants_and_products import RigidMDMin, AlignIniFinAtoms
+from nebkit.structure.tools.structure import group_surface_layers
+from nebkit.structure.utils import get_adsorbate_binding_atom_index, ase_atoms_to_mol
+from nebkit.structure.tools.matching import match_atom_indices
 from nebkit.network.helper import _combine_atoms
 
 

@@ -17,7 +17,7 @@ from random import shuffle
 import numpy as np
 
 from .helper import ReactionHelper
-from nebkit.tools.utils import ase_atoms_to_mol, pattern_to_mol, mol_to_ase_atoms
+from .utils import ase_atoms_to_mol, pattern_to_mol
 
 MAX_COORD_NUM = {1: 1, # H
                  6: 4, # C

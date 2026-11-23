@@ -11,7 +11,7 @@ from typing import Tuple, List
 from itertools import permutations, product, chain
 from copy import deepcopy
 
-from .utils import ase_atoms_to_mol, split_ase_atoms_fragments
+from nebkit.structure.utils import ase_atoms_to_mol, split_ase_atoms_fragments
 
 def _getall_matches_MCS(mol1:Chem.Mol, heavy_atom_indices1:np.ndarray, 
                         mol2:Chem.Mol, heavy_atom_indices2:np.ndarray)->List[List[Tuple[int, int]]]:

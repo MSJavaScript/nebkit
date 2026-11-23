@@ -3,7 +3,7 @@ from ase.formula import Formula
 from ase.io import write 
 from ase.data import covalent_radii
 
-from typing import List, Tuple, Dict, Set 
+from typing import List, Tuple, Dict, Set, Literal
 
 from rdkit import Chem 
 import numpy as np
@@ -11,11 +11,25 @@ import json, os
 
 from .generate import ExploreReactionNetwork
 from .helper import ReactionHelper
-from nebkit.tools.utils import ase_atoms_to_mol, get_adsorbate_binding_atom_index
-from nebkit.structure.bind_to_surface import get_outmost_atoms_for_surface, get_gcn, _bind_ini_fin_to_surface
-from nebkit.tools.plot_reaction import visualize_reaction, visualize_reaction_rdkit, draw_molecules_array
+from .utils import ase_atoms_to_mol, get_adsorbate_binding_atom_index
+from nebkit.structure.builder.bind_to_surface import (get_outmost_atoms_for_surface,
+                                                      get_gcn, 
+                                                      _bind_ini_fin_to_surface)
+from .plot_reaction import visualize_reaction, visualize_reaction_rdkit, draw_molecules_array
 
-
+def _get_unsaturation_degree(mol:Chem.Mol):
+    MAX_COORD_NUM = {1: 1, # H
+                 6: 4, # C
+                 7: 3, # N, 4配位的有NH4+和季铵盐
+                 8: 2, # O
+                 9: 1, # F
+                 17: 1 } #Cl
+    n = 0
+    for atom in mol.GetAtoms():
+        cn = atom.GetDegree()
+        an = atom.GetAtomicNum()
+        n += MAX_COORD_NUM[an] - cn
+    return n 
 
 def _get_default_bad_patterns(elements:List[str], max_natoms:Dict[str, int]) -> List[Tuple[str, str]]:
     '''
@@ -79,6 +93,7 @@ class ReactionSystem:
         # 以便于使用热力学方法进行反应路径的初筛
         self.species_atoms_list = []
         self.species_mols_list = []
+        self.unsaturation_degree_list = []
 
         # 每个物种的smiles表示
         self.species_smiles_list = []
@@ -98,12 +113,24 @@ class ReactionSystem:
         
 
     def dump_info(self, file_name:str):
+        '''
+        Dump the informations of reaction system into a json file. Also generate a `intermediates.extxyz` file, containing all the species in the reaction system. The dumped object is a dict with 3 fields:
+        - n_reactions: The number of reactions.
+        - n_species: The number of intermediate species.
+        - reactions: A dict list, contains information of each reaction.
+            - id: Id of reaction.
+            - reac_str: The string representation of reaction.
+            - reactant_indices: The indices of reactants in `intermediates.extxyz`
+            - product_indices: The indices of products.
+        Args:
+            file_name: The json file name.
+        '''
         assert file_name.endswith('json')
         reactions = []
         for i, reac in enumerate(self.reactions_list):
             reactions.append({
                 "id": i,
-                "reac_str": reac.reaction_str,
+                "reac_str": reac.unique_reaction_str,
                 "reactant_indices":self.reaction_num_tuple[i][0],
                 "product_indices": self.reaction_num_tuple[i][1]
             })
@@ -121,8 +148,27 @@ class ReactionSystem:
 
         return f"Informations of all the reactions are written to {file_name}. The atomic structures of all the intermediates are save in {intermediate_path}."
 
-
-    def render_system(self, dir_name:str, backend:str):
+    def get_reactions_species_matrix(self):
+        ''' 
+        Return a 0-1 matrix, rows correspond to reactions, columns correspond to intermediate species. a_ij = 1 means reaction i includes species j.
+        '''
+        nrow = len(self.reactions_list)
+        ncol = len(self.species_atoms_list)
+        a = np.zeros((nrow, ncol))
+        for i in range(nrow):
+            for j in self.reaction_num_tuple[i][0]:
+                a[i,j] = 1
+            for j in self.reaction_num_tuple[i][1]:
+                a[i,j] = 1
+        return a 
+            
+    def render_system(self, dir_name:str, backend:Literal["ase", "rdkit"] = "rdkit"):
+        '''
+        Render the intermediates and reactions to pictures.
+        Args:
+            dir_name: Path to the dir to save pngs.
+            backend: The backend used to render the reaction system, recommend "rdkit".
+        '''
         n_species = len(self.species_atoms_list)
         n_reactions = len(self.reactions_list)
 
@@ -170,9 +216,10 @@ class ReactionSystem:
 
         return f"Structures of {n_species} intermediates are shown in {os.path.join(dir_name, "intermediates.png")}\n {n_reactions} reactions are shown in pictures reaction_0.png to reaction_{n_reactions-1}.png in {dir_name}."
 
-    def _delete_related_reactions(self, 
+    def _get_related_reactions_idx(self, 
                                   initial_reactions_indices:List[int],
-                                  initial_species_indices:Set[int]) -> List[int]:
+                                  initial_species_indices:Set[int],
+                                  saturated_species_kept:Set[int] = {}) -> List[int]:
         
         # 不能删除初始反应物相关的反应
         # 提供初始的被删除反应的索引和反应涉及到的物种，据此找出所有需要被删除的反应
@@ -206,6 +253,7 @@ class ReactionSystem:
                     find_delete = True 
             # 从新物种集合里去掉反应物和最终产物
             collect_new_bad_species.difference_update(self.reactants_products_indices)
+            collect_new_bad_species.difference_update(saturated_species_kept)
             # 更新该集合
             species_in_deleted_reactions.update(collect_new_bad_species)
             # 所有需要删除的反应已经找到，退出
@@ -260,7 +308,8 @@ class ReactionSystem:
             else:
                 self.reactions_list.append(reaction)
                 self.reaction_num_tuple.append((ids_of_reactants, ids_of_products))
-          
+
+        self.unsaturation_degree_list = [_get_unsaturation_degree(mol) for mol in self.species_mols_list]
     def generate_elementary_steps(self,
                            ntimes:int = -1,
                            max_natoms_tot:int = -1, 
@@ -305,7 +354,7 @@ class ReactionSystem:
 
         self._update_reactions_and_species(reactions, ntimes > 0)
         
-    def delete_species(self, idx:int):
+    def delete_species(self, indices:List[int]):
         '''
         Delete the species of `idx` and the related elementary steps.
         '''
@@ -313,34 +362,62 @@ class ReactionSystem:
         reactions_need_tobe_deleted = []
         species_in_deleted_reactions = set()
 
+        indices_set = set(indices)
         # 先遍历每个反应，如果反应中包含物种idx，则该反应需要被删除
         for i in range(nreactions):
             num_tuple = self.reaction_num_tuple[i]
-            if (idx in num_tuple[0]) or (idx in num_tuple[1]):
-                reactions_need_tobe_deleted.append(i)
-                # 同时记录该反应涉及到的其他物种
-                species_in_deleted_reactions.update(num_tuple[0])
-                species_in_deleted_reactions.update(num_tuple[1])
-        
+            if indices_set.isdisjoint(num_tuple[0]) and indices_set.isdisjoint(num_tuple[1]):
+                continue
+            reactions_need_tobe_deleted.append(i)
+            # 同时记录该反应涉及到的其他物种
+            species_in_deleted_reactions.update(num_tuple[0])
+            species_in_deleted_reactions.update(num_tuple[1])
+                
         # 从这些物种里去掉反应物和最终产物
         species_in_deleted_reactions.difference_update(self.reactants_products_indices )
-        reactions_need_tobe_deleted = self._delete_related_reactions(reactions_need_tobe_deleted,
-                                                                     species_in_deleted_reactions)
+
+        # 找到所有不饱和度等于0的物种 
+        saturated_species_kept = set()
+        for i, d in enumerate(self.unsaturation_degree_list):
+            if d == 0 and (not i in self.reactants_products_indices):
+                saturated_species_kept.add(i)
+        # 如果indices中显式指定了某个饱和物种需要删除，那我们就删除它
+        saturated_species_kept.difference_update(indices) 
+        # 剩下的饱和物种是需要保留的，把它们从species_in_deleted_reactions中去掉
+        species_in_deleted_reactions.difference_update(saturated_species_kept)
+        
+        reactions_need_tobe_deleted = self._get_related_reactions_idx(reactions_need_tobe_deleted,
+                                                                     species_in_deleted_reactions,
+                                                                     saturated_species_kept)
         reactions = [self.reactions_list[i] for i in range(nreactions) if not i in reactions_need_tobe_deleted]
         self._update_reactions_and_species(reactions)
 
 
-    def delete_reaction(self, idx:int):
+    def delete_reactions(self, indices:List[int]):
         '''
-        Delete an elementary reaction.
+        Delete elementary reactions.
         '''
         nreactions = len(self.reaction_num_tuple)
-        reactions_need_tobe_deleted = [idx]
-        species_in_deleted_reactions = set(self.reaction_num_tuple[idx][0])
-        species_in_deleted_reactions.update(self.reaction_num_tuple[idx][1])
+        reactions_need_tobe_deleted = indices
+
+        species_in_deleted_reactions = set()
+        for i in indices:
+            species_in_deleted_reactions.update(self.reaction_num_tuple[i][0])
+            species_in_deleted_reactions.update(self.reaction_num_tuple[i][1])
         species_in_deleted_reactions.difference_update(self.reactants_products_indices)
-        reactions_need_tobe_deleted = self._delete_related_reactions(reactions_need_tobe_deleted,
-                                                                     species_in_deleted_reactions)
+
+        # 找到所有不饱和度等于0的物种 
+        saturated_species_kept = set()
+        for i, d in enumerate(self.unsaturation_degree_list):
+            if d == 0 and (not i in self.reactants_products_indices):
+                saturated_species_kept.add(i)
+        # 剩下的饱和物种是需要保留的，把它们从species_in_deleted_reactions中去掉
+        species_in_deleted_reactions.difference_update(saturated_species_kept)
+
+        reactions_need_tobe_deleted = self._get_related_reactions_idx(indices, 
+                                                                      species_in_deleted_reactions, 
+                                                                      saturated_species_kept)
+
         reactions = [self.reactions_list[i] for i in range(nreactions) if not i in reactions_need_tobe_deleted]
         self._update_reactions_and_species(reactions)
     
@@ -373,6 +450,25 @@ class ReactionSystem:
     
 
     def bind_to_surfaces(self, surfaces:List[Atoms]) -> list:
+        '''
+        Give surface structures, build IS and FS on these surfaces. Atomic indices are automatically matched, fragments orientation are aligned.
+        Args:
+            surfaces: A list of surface Atoms object.
+        Returns: A list of tuple, each tuple has 2 elements, corresponding to a surface given in `surfaces` arg. 
+        
+        The first element is a dict, key is the smiles string of intermediate species, value is a 3-elements tuple: (ir, 0/1, list)
+        - First element: The index of reaction which contains this species.
+        - Second element: 0 or 1. 0 means this species is reactant, 1 means this species is product.
+        - Third element: A list of int. These are the indices of structures, see below.
+
+        The Second element is a list of dict. Each dict corresponding to a reaction, it has 4 fields:
+        - name: The string representation of a reaction.
+        - ini: A list of Atoms object, these are all the possible IS structures on the given surface, surface sites are enumerated according to local chemical environment.
+        - fin: The list of FS structures corresponding to `ini` field. Atomic indices are matched. Fragments orientation is also aligned.
+        - ads_atoms_index: The atomic indices of adsorbates. Useful when you want to fix surface atoms.
+
+        Because there are usually more reactions than intermediates. For example, CO can appear in reactions `CO2<->CO+O`, `CO+H<->COH` and `CO<->C+O`. For these reactions, they can use the same CO adsorption structure. We provide the first element of the tuple for convenience, to only preform calculation on the adsorption structure once, instead of calculate it for each of the reaction. For example, for intermediate CO, suppose the tuple is (1, 0, [0,1,2]). Then we can only perform DFT calculation on IS (the second element is 0) structures 0,1,2 of reaction 1. These are all the possible CO adsorption structures we will meet in this reaction system.
+        '''
         # 获取表面的最表层原子 
         surface_info_list = []
 

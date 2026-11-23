@@ -7,10 +7,13 @@ from ase.io import write
 
 from typing import List, Tuple
 
-from nebkit.tools.utils import split_ase_atoms_fragments, get_distance_periodic, get_structures_distance, remove_duplicated_images
-from nebkit.calculator.surface_attractor import SurfaceAttractor
-from nebkit.calculator.tools import adjust_positions
-from nebkit.calculator.idpp import idpp_interpolate
+from nebkit.structure.utils import (split_ase_atoms_fragments, 
+                                          get_distance_periodic, 
+                                          get_structures_distance, 
+                                          remove_duplicated_images)
+from nebkit.structure.calculator.surface_attractor import SurfaceAttractor
+from nebkit.structure.calculator.tools import adjust_positions
+from nebkit.structure.calculator.idpp import idpp_interpolate
 
 import numpy as np
 

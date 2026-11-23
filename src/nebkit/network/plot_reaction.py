@@ -14,7 +14,6 @@ from .utils import ase_atoms_to_mol
 from rdkit import Chem, rdBase
 from rdkit.Chem import rdChemReactions
 from rdkit.Chem.Draw import rdMolDraw2D
-from rdkit.Chem import Draw
 
 def make_flat_2d(mol: Chem.Mol) -> Chem.Mol:
     mol = Chem.Mol(mol) 

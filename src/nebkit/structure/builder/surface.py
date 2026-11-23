@@ -2,9 +2,9 @@ from typing import Tuple
 from ase import Atoms 
 from ase.constraints import FixAtoms
 
-from nebkit.tools.structure import sort_elements, group_surface_layers
-from nebkit.fairchem.slab import Slab
-from nebkit.fairchem.bulk import Bulk
+from nebkit.structure.tools.structure import sort_elements, group_surface_layers
+from nebkit.structure.fairchem.slab import Slab
+from nebkit.structure.fairchem.bulk import Bulk
 
 def build_surface_from_bulk(
         bulk_atoms: Atoms,

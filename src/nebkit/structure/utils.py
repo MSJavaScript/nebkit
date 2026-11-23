@@ -3,23 +3,8 @@ from rdkit.Chem import AllChem
 from rdkit import rdBase
 from ase import Atoms  
 from ase.neighborlist import NeighborList, natural_cutoffs
-from ase.data import covalent_radii
 import numpy as np 
 from typing import List, Tuple
-from copy import deepcopy
-
-def mol_to_ase_atoms(mol:Chem.Mol):
-    new_mol = deepcopy(mol)
-    with rdBase.BlockLogs():
-        new_mol.UpdatePropertyCache(strict=False)
-        params = AllChem.ETKDGv3()
-        params.randomSeed = 42 
-        AllChem.EmbedMolecule(new_mol, params)
-    atomic_numbers = [atom.GetAtomicNum() for atom in new_mol.GetAtoms()] 
-    conf = new_mol.GetConformer()
-    positions = conf.GetPositions()
-    atoms = Atoms(numbers=atomic_numbers, positions=positions)
-    return atoms 
 
 def get_adsorbate_binding_atom_index(atoms:Atoms) -> tuple | None:
     max_coord = {
@@ -108,20 +93,6 @@ def find_connected_components(adj_matrix:np.ndarray) -> List[List[int]]:
     
     return list(components_dict.values())
 
-
-def pattern_to_mol(symbols:str, edges:str):
-    symbols_list = symbols.split(",")
-    edges_list = edges.split(",")
-    mol = Chem.RWMol()
-    for s in symbols_list:
-        mol.AddAtom(Chem.Atom(s))
-    if len(symbols_list) == 1:
-        return mol 
-    
-    for edge in edges_list:
-        a,b = edge.split('-')
-        mol.AddBond(int(a), int(b), Chem.BondType.SINGLE)
-    return mol.GetMol() 
 
 def ase_atoms_to_mol(atoms:Atoms, skin:float=0.1, ignoreH:bool = False) -> Chem.Mol:
     '''
