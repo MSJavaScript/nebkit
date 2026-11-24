@@ -346,7 +346,9 @@ class ReactionSystem:
                                      min_natoms, 
                                      forbidden_pattern)
         if ntimes > 0:
-            ern.search(bfs=True) # 第一次先用广度优先搜索寻找最短路径
+            flag = ern.search(bfs=True) # 第一次先用广度优先搜索寻找最短路径
+            if not flag:
+                return False, "No reactions are generated. Please check the constraints you set on intermediate species."
             reactions = ern.get_reactions()
             for i in range(1, ntimes):
                 ern.search()
@@ -354,10 +356,13 @@ class ReactionSystem:
                     continue
                 reactions.extend(ern.get_reactions())
         else:
-            ern.run()
+            flag = ern.run()
+            if not flag:
+                return False, "No reactions are generated. Please check the constraints you set on intermediate species."
             reactions = ern.get_reactions()
 
         self._update_reactions_and_species(reactions, ntimes > 0)
+        return True, f"{len(self.reactions_list)} reactions are generated."
         
     def delete_species(self, indices:List[int]):
         '''

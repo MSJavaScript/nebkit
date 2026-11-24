@@ -33,7 +33,7 @@ class SingleBondReaction:
     def __init__(self, 
                  reactants_str:List[str], 
                  products_str:List[str],
-                 mapping_atom_index: Tuple[np.ndarray, np.ndarray]):
+                 mapping_atom_index: np.ndarray):
         '''
         Args:
             reactants_str: 反应物的smiles字符串列表
@@ -102,18 +102,45 @@ def form_bond_in_mol(mol:Chem.Mol, index1:int, index2:int) -> Chem.Mol:
     new_mol = new_mol.GetMol()
     return new_mol
 
-def break_bond_in_mol(mol:Chem.Mol, index1:int, index2:int)->Tuple[Chem.Mol, ...]:
+def break_bond_in_mol(
+    mol: Chem.Mol,
+    index1: int,
+    index2: int,
+) -> Tuple[Tuple[Chem.Mol, ...], np.ndarray]:
     bond = mol.GetBondBetweenAtoms(index1, index2)
     if bond is None:
-        raise ValueError(f"There is no bond between {index1} and {index2}")    
+        raise ValueError(f"There is no bond between {index1} and {index2}")
+
     rw_mol = Chem.RWMol(mol)
     rw_mol.RemoveBond(index1, index2)
     temp_mol = rw_mol.GetMol()
-    frags = Chem.GetMolFrags(temp_mol, asMols=True)
-    # Removing a bond that belongs to a ring does not disconnect the molecule,
-    # so `frags` may contain a single fragment (ring opening). Return however
-    # many fragments result instead of assuming exactly two.
-    return tuple(make_pure_graph(frag) for frag in frags)
+
+    atom_to_frag = []   # 每个原始原子属于哪个 fragment
+    frag_to_atoms = []  # 每个 fragment 包含哪些原始原子
+
+    frags = Chem.GetMolFrags(
+        temp_mol,
+        asMols=True,
+        frags=atom_to_frag,
+        fragsMolAtomMapping=frag_to_atoms,
+    )
+
+    n_atoms = mol.GetNumAtoms()
+    mapping_array = np.zeros((3, n_atoms), dtype=int)
+
+    # 第一行：原始分子中的原子编号
+    mapping_array[0] = np.arange(n_atoms)
+
+    # 第二行：该原子在断键后的第几个 fragment 中，0-based
+    mapping_array[1] = atom_to_frag
+
+    # 第三行：该原子在对应 fragment 中的位置，0-based
+    for atom_ids in frag_to_atoms:
+        for local_idx, atom_idx in enumerate(atom_ids):
+            mapping_array[2, atom_idx] = local_idx
+
+    frags = tuple(make_pure_graph(frag) for frag in frags)
+    return frags, mapping_array
 
 
 def get_mol_info(mol:Chem.Mol):
@@ -198,7 +225,7 @@ class ExploreReactionNetwork:
                     rid:List[int], 
                     pstr:List[str], 
                     pmol:List[Chem.Mol],
-                    mapping_atom_index:Tuple[np.ndarray, np.ndarray])->None | Dict[str, Any]:
+                    mapping_atom_index:np.ndarray)->None | Dict[str, Any]:
         '''
         辅助函数，用于更新`self.reaction_str_list`, `self.mols_list`, `self.mols_smiles_list`和`self.mols_info_list`
         根据情况返回新的正确的`current_mols` 和 `previous_mols`。
@@ -208,7 +235,7 @@ class ExploreReactionNetwork:
             rid:  反应物在self.mols_list中的索引
             pstr: 产物SMILES字符串的列表
             pmol: 产物分子的列表
-            mapping_atom_index: 表示原子映射关系的tuple
+            mapping_atom_index: 表示原子映射关系的numpy数组，三行
 
         '''
         # 反应是否已经存在？如果反应存在则返回None
@@ -279,7 +306,9 @@ class ExploreReactionNetwork:
                     new_mol = form_bond_in_mol(mol, idx1, idx2)
                     new_smiles = Chem.MolToSmiles(new_mol, canonical=True)
 
-                    mapping_atom_index = (np.arange(mols_info["natoms"]), np.arange(mols_info["natoms"]))
+                    mapping_atom_index = np.vstack((np.arange(mols_info["natoms"]),
+                                                    np.zeros((1, mols_info["natoms"])),
+                                                    np.arange(mols_info["natoms"])))
                     # active_atom_index = [[idx1, idx2]] 
                     # reaction_type = ReactionType.IN_MOL_FORM_BOND
 
@@ -322,8 +351,11 @@ class ExploreReactionNetwork:
                         new_mol = merge_two_mols(mol_1, atom_idx1, mol_2, atom_idx2)
                         new_smiles = Chem.MolToSmiles(new_mol, canonical=True)
 
-                        mapping_atom_index = (np.hstack((np.arange(mols_info_1["natoms"]), np.arange(mols_info_2["natoms"]))), 
-                                              np.arange(mols_info_1["natoms"]+ mols_info_2["natoms"]))
+                        natoms = mols_info_1["natoms"]+ mols_info_2["natoms"]
+                        mapping_atom_index = (np.hstack((np.arange(mols_info_1["natoms"]), np.arange(mols_info_2["natoms"]))),
+                                              np.zeros((1, natoms)),
+                                              np.arange(natoms))
+                        mapping_atom_index = np.vstack(mapping_atom_index)
                         # active_atom_index = [[atom_idx1], [atom_idx2]]
                         # reaction_type = ReactionType.BETWEEN_MOLS_FORM_BOND
                         new_state = self.update_state(state, [smiles_1, smiles_2], [idx1, idx2], [new_smiles], [new_mol], mapping_atom_index)
@@ -362,8 +394,11 @@ class ExploreReactionNetwork:
                         new_mol = merge_two_mols(mol_i, ii, mol_j, jj)
                         new_smiles = Chem.MolToSmiles(new_mol, canonical=True)
 
-                        mapping_atom_index = (np.hstack((np.arange(mols_info_i["natoms"]), np.arange(mols_info_j["natoms"]))), 
-                                              np.arange(mols_info_i["natoms"]+ mols_info_j["natoms"]))
+                        natoms = mols_info_i["natoms"]+ mols_info_j["natoms"]
+                        mapping_atom_index = (np.hstack((np.arange(mols_info_i["natoms"]), np.arange(mols_info_j["natoms"]))),
+                                              np.zeros((1, natoms)), 
+                                              np.arange(natoms))
+                        mapping_atom_index = np.vstack(mapping_atom_index)
                         # active_atom_index = [[ii], [jj]]
                         # reaction_type = ReactionType.BETWEEN_MOLS_FORM_BOND
 
@@ -387,16 +422,14 @@ class ExploreReactionNetwork:
                         bonds_list.append((i_row, i_col))
             
             for a, b in bonds_list:
-                new_mol = list(break_bond_in_mol(mol, a, b))
+                new_mol, mapping_atom_index = break_bond_in_mol(mol, a, b)
                 new_smiles = [Chem.MolToSmiles(fragment, canonical=True) for fragment in new_mol]
 
                 #active_atom_index = [[a, b]] 
-                if len(new_smiles) == 1:
-                    mapping_atom_index = (np.arange(mols_info["natoms"]),  np.arange(mols_info["natoms"]))
-                    #reaction_type = ReactionType.MOL_BREAK_BOND_1
-                else:
-                    mapping_atom_index = (np.arange(mols_info["natoms"]), 
-                                          np.hstack((np.arange(new_mol[0].GetNumAtoms()), np.arange(new_mol[1].GetNumAtoms()))))
+                # if len(new_smiles) == 1:
+                #     mapping_atom_index = (np.arange(mols_info["natoms"]),  np.arange(mols_info["natoms"]))
+                #     #reaction_type = ReactionType.MOL_BREAK_BOND_1
+                if len(new_smiles) == 2:
                     #reaction_type = ReactionType.MOL_BREAK_BOND_2
                     #如果产生了两个分子片，检测是否小于最小原子数
                     if new_mol[0].GetNumAtoms() < self.min_natoms_tot or new_mol[1].GetNumAtoms() < self.min_natoms_tot:
@@ -597,25 +630,10 @@ class ExploreReactionNetwork:
         reactions_list = []
         for i in self.final_state["reaction_index"]:
             reac_str = self.reaction_str_list[i]
-
-            n_atoms = len(reac_str.mapping_atom_index[0])
-            mapping_atom_index = np.zeros((3, n_atoms), dtype=int)
-            # 原子在反应物中的id，例如对于[CH3, CO]，依次为[0,1,2,3,0,1]
-            mapping_atom_index[0, :] = reac_str.mapping_atom_index[0] 
-            # 该原子在第几个分子中？
-            current_id = -1
-            for ii, atom_id in enumerate(reac_str.mapping_atom_index[1]):
-                if atom_id == 0:
-                    current_id += 1
-                mapping_atom_index[1, ii] = current_id
-            # 该原子在产物分子中的编号。注意因为目前是用ExploreReactionNetwork类生成的
-            # 基元反应，所以原子编号有这样简单的对应。
-            mapping_atom_index[2, :] = reac_str.mapping_atom_index[1]
-
             reac_helper = ReactionHelper(
                 reactants_mols=reac_str.reactants_mol,
                 products_mols=reac_str.products_mol,
-                mapping_atom_index=mapping_atom_index)
+                mapping_atom_index=reac_str.mapping_atom_index)
                         
             reactions_list.append(reac_helper)
         return reactions_list
