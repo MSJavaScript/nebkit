@@ -237,6 +237,7 @@ def _combine_atoms(list_of_atoms:List[Atoms]):
         atoms = list_of_atoms[0].copy()
         center = np.mean(atoms.positions, axis=0)
         atoms.positions -= center 
+        atoms.rotate(np.random.random()*90-45, np.random.random((3, ))-0.5)
         return atoms
     if len(list_of_atoms) == 2:
         # 首先确定每个分子片的直径
@@ -263,6 +264,7 @@ def _combine_atoms(list_of_atoms:List[Atoms]):
         atoms2.positions += center2
 
         atoms1.extend(atoms2)
+        atoms1.rotate(np.random.random()*90-45, np.random.random((3, ))-0.5)
         return atoms1
     raise ValueError("Only no more than two fragments are allowed.")
 
